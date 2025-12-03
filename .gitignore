@@ -1,0 +1,96 @@
+# 환경 변수 및 설정 파일
+.env
+.env.local
+.env.*.local
+
+# Claude Code 개인 설정
+.claude/
+
+# 데이터베이스 파일
+*.db
+*.sqlite
+*.sqlite3
+backend/data/
+
+# 업로드된 파일 (공문서 등 민감한 정보)
+backend/uploads/
+uploads/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# 로그 파일
+*.log
+logs/
+
+# OS 파일
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Docker 볼륨 데이터
+docker-volumes/
+
+# 임시 파일
+*.tmp
+*.temp
+*.bak
+*.backup
