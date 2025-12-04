@@ -360,3 +360,72 @@ class LLMService:
         except Exception as e:
             # 실무에서는 로그를 남기고, Rule-base(단순 키워드 매칭)로 Fallback 처리하는 것이 안전함
             raise LLMServiceError(f"AI 분석 중 오류 발생: {str(e)}")
+
+    def generate_completion(
+        self,
+        messages: List[dict],
+        temperature: float = 0.1,
+        max_tokens: int = 1000
+    ) -> dict:
+        """LLM completion 생성 (동기 버전)
+
+        Args:
+            messages: 메시지 리스트 [{"role": "system", "content": "..."}, ...]
+            temperature: 온도 (0.0~1.0)
+            max_tokens: 최대 토큰 수
+
+        Returns:
+            응답 딕셔너리 {"content": "..."}
+        """
+        import httpx
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                headers = {
+                    "Content-Type": "application/json",
+                }
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+
+                response = client.post(
+                    self.api_url,
+                    json=payload,
+                    headers=headers
+                )
+                response.raise_for_status()
+                result = response.json()
+
+                if "choices" not in result or len(result["choices"]) == 0:
+                    raise LLMAPIError("LLM API 응답에 choices가 없습니다.")
+
+                content = result["choices"][0]["message"]["content"].strip()
+
+                return {"content": content}
+
+        except httpx.HTTPStatusError as e:
+            raise LLMAPIError(f"LLM API HTTP 오류 ({e.response.status_code}): {str(e)}")
+        except httpx.TimeoutException as e:
+            raise LLMAPIError(f"LLM API 타임아웃: {str(e)}")
+        except httpx.RequestError as e:
+            raise LLMAPIError(f"LLM API 요청 실패: {str(e)}")
+        except Exception as e:
+            raise LLMServiceError(f"LLM 생성 중 오류 발생: {str(e)}")
+
+
+# 싱글톤 인스턴스
+_llm_service = None
+
+
+def get_llm_service() -> LLMService:
+    """LLM 서비스 싱글톤 인스턴스 반환"""
+    global _llm_service
+    if _llm_service is None:
+        _llm_service = LLMService()
+    return _llm_service

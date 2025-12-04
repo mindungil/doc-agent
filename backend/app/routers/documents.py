@@ -82,15 +82,15 @@ async def ensure_recommendation_json_column(db: AsyncSession):
 
 async def process_document_async(document_id: int):
     """
-    새로운 문서 처리 파이프라인:
-    1. DeepSeek-OCR 파싱
-    2. LLM OCR 보정
-    3. 수신자 필터링 (조건부)
-    4. 부서 필터링
-    5. 문서 요약 + 최종 랭킹
-    6. 자동 배정
+    Pipeline V2 문서 처리:
+    1. OCR 파싱
+    2. 텍스트 보정
+    3. Pipeline V2 처리 (BM25 + 유사도 검색 + 증거 수집 + LLM 추론)
+    4. 부서 내 담당자 찾기 (RAG 검색)
+    5. 자동 배정
     """
     from sqlalchemy import text
+    from app.services.pipeline_v2 import get_pipeline_v2
 
     async with AsyncSessionLocal() as db:
         try:
@@ -176,363 +176,175 @@ async def process_document_async(document_id: int):
                 await db.commit()
                 return
 
-            # ==================== Phase 3: 수신자 필터링 ====================
+            # ==================== Phase 3: Pipeline V2 처리 ====================
             try:
-                doc.status = "수신자 분석 중"
+                doc.status = "Pipeline V2 분석 중"
                 await db.commit()
 
-                recipient_info = await recipient_filter_service.extract_recipient_info(final_text)
+                logger.info(f"[PIPELINE_V2] Pipeline V2 호출 시작 - 제목: {doc.title}")
 
-                # 수신자 정보 저장
-                doc.recipient_info = json.dumps({
-                    "has_recipient": recipient_info.has_recipient,
-                    "is_specific": recipient_info.is_specific,
-                    "recipient_text": recipient_info.recipient_text
-                }, ensure_ascii=False)
-
-                # 특정 수신자인 경우 필터링
-                recipient_candidates = []
-                if recipient_info.has_recipient and recipient_info.is_specific:
-                    recipient_candidates = await recipient_filter_service.filter_by_recipient(
-                        recipient_info.recipient_text,
-                        top_k=3
-                    )
-
-                await db.commit()
-
-            except Exception as e:
-                # 수신자 필터링 실패 시 계속 진행
-                recipient_candidates = []
-
-            # ==================== Phase 4: 부서 필터링 ====================
-            try:
-                doc.status = "부서 분석 중"
-                await db.commit()
-
-                dept_filter_result = await department_filter_service.filter_by_department(
-                    final_text,
-                    doc.title
+                # Pipeline V2 호출
+                pipeline_v2 = get_pipeline_v2()
+                pipeline_result = await pipeline_v2.process_document(
+                    db=db,
+                    document=doc,
+                    ocr_text=doc.ocr_raw_text
                 )
 
-                # 부서 정보 저장
-                doc.filtered_departments = json.dumps({
-                    "selected_departments": [
-                        {
-                            "dept1": d.dept1,
-                            "dept2": d.dept2,
-                            "dept3": d.dept3,
-                            "relevance_score": d.relevance_score
-                        }
-                        for d in dept_filter_result.selected_departments
-                    ],
-                    "reasoning": dept_filter_result.reasoning
-                }, ensure_ascii=False)
-                doc.filtering_processed_at = now_kst()
+                logger.info(f"[PIPELINE_V2] Pipeline V2 완료: {pipeline_result}")
 
+                recommendation = pipeline_result['recommendation']
+                recommended_dept = recommendation['recommended_dept']
+                auto_assigned = recommendation['auto_assigned']
+                confidence = recommendation['confidence']
+                reasoning = recommendation['reasoning']
+                evidence = recommendation.get('evidence', {})
+
+                # LLM 추론 결과에서 추천 담당자 추출
+                llm_output = recommendation.get('llm_output', {})
+                llm_recommended_employee = llm_output.get('recommended_employee') if llm_output else None
+
+                # ==================== Phase 4: 부서 내 담당자 찾기 ====================
+                doc.status = "담당자 검색 중"
                 await db.commit()
 
-            except Exception as e:
-                dept_filter_result = None
+                assigned_employee = None
+                employee_dept = None
 
-            # ==================== Phase 5: 3단계 우선순위 파이프라인 ====================
-            try:
-                doc.status = "제목 유사도 분석 중"
-                await db.commit()
+                # 1순위: LLM이 추천한 담당자 사용
+                if llm_recommended_employee:
+                    logger.info(f"[PIPELINE_V2] LLM 추천 담당자: {llm_recommended_employee}")
 
-                # 3단계 우선순위 파이프라인 실행
-                # Stage 1: Skeleton Matching (Fast-Track)
-                # Stage 2: Action-based Hybrid Search (Deep-Check)
-                # Stage 3: LLM Final Verification (Safety Net)
-                quick_summary = final_text[:500] if len(final_text) > 500 else final_text
-
-                logger.info(f"[PIPELINE_START] 3단계 파이프라인 호출 시작 - 제목: {doc.title}")
-                try:
-                    title_similar_docs, pipeline_stage = await historical_search_service.search_with_three_stage_pipeline(
-                        doc.title,
-                        document_summary=quick_summary,
-                        top_k=3
-                    )
-                    logger.info(f"[PIPELINE_SUCCESS] 3단계 파이프라인 완료 - 단계: {pipeline_stage}")
-                except Exception as pipeline_error:
-                    logger.error(f"[PIPELINE_ERROR] 3단계 파이프라인 오류: {str(pipeline_error)}", exc_info=True)
-                    # 예외 발생 시 빈 결과와 오류 메시지 반환
-                    title_similar_docs = []
-                    pipeline_stage = f"오류: {str(pipeline_error)}"
-
-                # 최고 유사도 확인
-                max_title_score = title_similar_docs[0].score if title_similar_docs else 0.0
-                logger.info(f"파이프라인 단계: {pipeline_stage}, 제목 최고 유사도: {max_title_score:.3f}")
-
-                # ===== 파이프라인 결과 기반 분기 처리 =====
-                skip_pipeline = False
-                auto_assign_reason = ""
-                historical_candidates = []
-
-                # Stage 1 (Skeleton Match) 또는 고유사도(>= 0.95)인 경우 즉시 배부
-                if "Stage 1" in pipeline_stage or max_title_score >= 0.95:
-                    logger.info(f"🎯 Fast-Track: {pipeline_stage} (유사도: {max_title_score:.3f})")
-
-                    # 모든 보고자 추출
-                    reporters = []
-                    for doc_item in title_similar_docs:
-                        if doc_item.reporter:
-                            reporters.append(doc_item.reporter)
-
-                    logger.info(f"추출된 보고자: {reporters}")
-
-                    # 부서 필터링 없이 과거 담당자 바로 사용
-                    historical_candidates = await historical_search_service.get_candidates_from_historical_docs(
-                        title_similar_docs,
-                        min_score=max_title_score
+                    # RAG에서 해당 담당자 정보 조회 (검증 및 부서 정보 획득)
+                    llm_employee_candidates = await rag_service.search_similar_employees(
+                        llm_recommended_employee,
+                        top_k=5
                     )
 
-                    # 직급 필터링 (실무자만)
-                    if historical_candidates:
-                        historical_candidates = historical_search_service.filter_by_working_level(
-                            historical_candidates,
-                            threshold=7
-                        )
+                    # 이름이 정확히 일치하는 직원 찾기
+                    for candidate in llm_employee_candidates:
+                        if candidate.name == llm_recommended_employee:
+                            assigned_employee = candidate.name
+                            employee_dept = f"{candidate.dept1} {candidate.dept2} {candidate.dept3}".strip()
+                            logger.info(f"[PIPELINE_V2] LLM 추천 담당자 확인: {assigned_employee} ({employee_dept})")
+                            break
 
-                    logger.info(f"과거 담당자 직급 필터링 후: {len(historical_candidates)}명")
+                    if not assigned_employee:
+                        logger.warning(f"[PIPELINE_V2] LLM 추천 담당자 '{llm_recommended_employee}'를 RAG에서 찾을 수 없음")
 
-                    if historical_candidates:
-                        skip_pipeline = True
-                        auto_assign_reason = f"{pipeline_stage} (유사도: {max_title_score:.3f})"
+                # 2순위: 자동 배정인 경우 과거 보고자 사용
+                if not assigned_employee and auto_assigned:
+                    logger.info(f"[PIPELINE_V2] 자동 배정 모드 - 과거 보고자 검색 (부서: {recommended_dept})")
 
-                        doc.filtered_departments = json.dumps({
-                            "auto_assign_type": "fast_track",
-                            "pipeline_stage": pipeline_stage,
-                            "title_score": max_title_score,
-                            "candidate_count": len(historical_candidates)
-                        }, ensure_ascii=False)
+                    # 증거에서 과거 보고자 추출
+                    history_evidence = evidence.get('history_evidence', [])
 
-                        logger.info(f"Fast-Track 배부: {[c.name for c in historical_candidates]}")
+                    if history_evidence:
+                        # 상위 유사 문서의 보고자 추출
+                        best_match = history_evidence[0]
+                        reporter = best_match.get('reporter')
 
-                # Stage 2/3 (LLM 연속성 확인) 또는 중간 유사도인 경우
-                elif "Stage 3" in pipeline_stage or 0.75 <= max_title_score < 0.95:
-                    logger.info(f"✅ {pipeline_stage} (유사도: {max_title_score:.3f})")
+                        if reporter:
+                            logger.info(f"[PIPELINE_V2] 과거 보고자 발견: {reporter}")
 
-                    # 부서 필터링 없이 과거 담당자 바로 사용
-                    historical_candidates = await historical_search_service.get_candidates_from_historical_docs(
-                        title_similar_docs,
-                        min_score=0.75
+                            # RAG에서 해당 보고자 정보 조회
+                            reporter_candidates = await rag_service.search_similar_employees(
+                                reporter,
+                                top_k=5
+                            )
+
+                            # 이름이 정확히 일치하는 직원 찾기
+                            for candidate in reporter_candidates:
+                                if candidate.name == reporter:
+                                    assigned_employee = candidate.name
+                                    employee_dept = f"{candidate.dept1} {candidate.dept2} {candidate.dept3}".strip()
+                                    logger.info(f"[PIPELINE_V2] 과거 보고자 확인: {assigned_employee} ({employee_dept})")
+                                    break
+
+                # 3순위: 벡터 검색으로 부서 내 담당자 찾기
+                if not assigned_employee:
+                    logger.info(f"[PIPELINE_V2] 부서 '{recommended_dept}' 내 담당자 검색")
+
+                    # 추천된 부서 + 문서 제목/내용으로 RAG 검색
+                    search_query = f"{recommended_dept} {doc.title}"
+                    if final_text:
+                        search_query += f"\n{final_text[:300]}"
+
+                    dept_candidates = await rag_service.search_similar_employees(
+                        search_query,
+                        top_k=20
                     )
 
-                    # 직급 필터링 (실무자만)
-                    if historical_candidates:
-                        historical_candidates = historical_search_service.filter_by_working_level(
-                            historical_candidates,
-                            threshold=7
-                        )
+                    # 추천된 부서로 필터링
+                    dept_filtered = [
+                        c for c in dept_candidates
+                        if recommended_dept in f"{c.dept1} {c.dept2} {c.dept3}"
+                    ]
 
-                    if historical_candidates:
-                        skip_pipeline = True
-                        auto_assign_reason = f"{pipeline_stage} (유사도: {max_title_score:.3f})"
-
-                        doc.filtered_departments = json.dumps({
-                            "auto_assign_type": "verified",
-                            "pipeline_stage": pipeline_stage,
-                            "title_score": max_title_score,
-                            "candidate_count": len(historical_candidates)
-                        }, ensure_ascii=False)
-
-                        logger.info(f"검증 완료 배부: {[c.name for c in historical_candidates]}")
+                    if dept_filtered:
+                        assigned_employee = dept_filtered[0].name
+                        employee_dept = f"{dept_filtered[0].dept1} {dept_filtered[0].dept2} {dept_filtered[0].dept3}".strip()
+                        logger.info(f"[PIPELINE_V2] 부서 필터링 후 담당자: {assigned_employee} ({employee_dept})")
+                    elif dept_candidates:
+                        # 부서 매칭 실패 시 상위 후보 사용
+                        assigned_employee = dept_candidates[0].name
+                        employee_dept = f"{dept_candidates[0].dept1} {dept_candidates[0].dept2} {dept_candidates[0].dept3}".strip()
+                        logger.warning(f"[PIPELINE_V2] 부서 매칭 실패, 상위 후보 사용: {assigned_employee} ({employee_dept})")
                     else:
-                        logger.info(f"❌ 후보자 없음 - 전체 파이프라인 진행")
+                        logger.warning(f"[PIPELINE_V2] 담당자를 찾을 수 없음")
 
-                # 저유사도 또는 연속성 부정 → 전체 파이프라인 진행
-                else:
-                    logger.info(f"📊 {pipeline_stage} (유사도: {max_title_score:.3f}) - 전체 파이프라인 진행")
-                    historical_candidates = []
-
-                doc.status = "최종 분석 중"
-                await db.commit()
-
-                # ===== skip_pipeline에 따른 분기 처리 =====
-                if skip_pipeline and historical_candidates:
-                    # 🚀 고속 경로: 즉시 배부 (RAG, 부서 필터링, LLM 랭킹 생략)
-                    logger.info("⚡ 고속 경로: 하위 파이프라인 생략하고 즉시 배부")
-
-                    # 간단한 랭킹 (과거 유사도 기반)
-                    from app.models.ocr_schemas import RankedCandidate
-                    ranked_candidates = []
-
-                    for idx, candidate in enumerate(historical_candidates[:5]):
-                        ranked_candidates.append(RankedCandidate(
-                            name=candidate.name,
-                            rank=candidate.rank,
-                            dept1=candidate.dept1,
-                            dept2=candidate.dept2,
-                            dept3=candidate.dept3,
-                            tasks=candidate.tasks,
-                            phone=candidate.phone,
-                            rag_score=candidate.score,
-                            llm_score=None,
-                            final_score=(candidate.score or 0.9) * 100,
-                            reasoning=auto_assign_reason
-                        ))
-
-                    # 간단한 요약만 저장
-                    doc.document_keywords = json.dumps({
-                        "keywords": [doc.title],
-                        "summary": auto_assign_reason,
-                        "required_expertise": [],
-                        "fast_track": True
-                    }, ensure_ascii=False)
-
-                    logger.info(f"고속 배부 완료: {ranked_candidates[0].name}")
-
-                else:
-                    # 📊 일반 경로: 전체 파이프라인 진행
-                    logger.info("📊 일반 경로: 전체 파이프라인 진행")
-
-                    # 문서 요약
-                    doc_summary = await document_summarizer_service.summarize_document_keywords(
-                        final_text,
-                        doc.title
-                    )
-
-                    # 키워드 저장
-                    doc.document_keywords = json.dumps({
-                        "keywords": doc_summary.keywords,
-                        "summary": doc_summary.summary,
-                        "required_expertise": doc_summary.required_expertise,
-                        "fast_track": False
-                    }, ensure_ascii=False)
-
-                    # 후보자 결정 우선순위:
-                    # 1순위: 과거 문서 기반 후보
-                    # 2순위: 수신자 필터링 결과
-                    # 3순위: RAG 전체 검색
-                    base_candidates = []
-
-                    if historical_candidates:
-                        logger.info(f"1순위: 과거 문서 기반 후보 {len(historical_candidates)}명 사용")
-                        base_candidates = historical_candidates
-                    elif recipient_candidates:
-                        logger.info(f"2순위: 수신자 필터링 후보 {len(recipient_candidates)}명 사용")
-                        base_candidates = recipient_candidates
-                    else:
-                        logger.info("3순위: RAG 전체 검색 사용")
-                        base_candidates = await rag_service.search_similar_employees(
-                            f"{doc.title}\n{final_text}",
-                            top_k=20
-                        )
-
-                    # 부서 필터링 적용 (선택적)
-                    if dept_filter_result and dept_filter_result.selected_departments:
-                        filtered_candidates = department_filter_service.filter_candidates_by_departments(
-                            base_candidates,
-                            dept_filter_result.selected_departments
-                        )
-                        # 필터링 후 후보가 너무 적으면 원본 유지
-                        if len(filtered_candidates) < 3 and len(base_candidates) >= 3:
-                            logger.warning("부서 필터링 후 후보가 부족하여 원본 사용")
-                            filtered_candidates = base_candidates
-                    else:
-                        filtered_candidates = base_candidates
-
-                    if not filtered_candidates:
-                        # 필터링 후 후보가 없으면 원본 사용
-                        filtered_candidates = base_candidates[:10]
-
-                    # 최종 랭킹
-                    ranked_candidates = await document_summarizer_service.rank_candidates(
-                        doc_summary,
-                        filtered_candidates,
-                        final_text,
-                        use_hybrid=True
-                    )
-
-                await db.commit()
-
-            except Exception as e:
-                doc.status = f"분석 실패: {str(e)[:50]}"
-                await db.commit()
-                return
-
-            # ==================== Phase 6: 자동 배정 ====================
-            if ranked_candidates:
-                try:
-                    top_candidate = ranked_candidates[0]
-
-                    # EmployeeCandidate 형식으로 변환
-                    employee_candidates = []
-                    for rc in ranked_candidates:
-                        employee_candidates.append(EmployeeCandidate(
-                            name=rc.name,
-                            rank=rc.rank,
-                            dept1=rc.dept1,
-                            dept2=rc.dept2,
-                            dept3=rc.dept3,
-                            tasks=rc.tasks,
-                            phone=rc.phone,
-                            score=rc.final_score / 100.0  # 0-1 범위로 변환
-                        ))
-
-                    # 추천 결과 저장
-                    recommendation_dict = {
-                        "primary": {
-                            "name": top_candidate.name,
-                            "rank": top_candidate.rank,
-                            "dept1": top_candidate.dept1,
-                            "dept2": top_candidate.dept2,
-                            "dept3": top_candidate.dept3,
-                            "tasks": top_candidate.tasks,
-                            "phone": top_candidate.phone,
-                            "score": top_candidate.final_score,
-                        },
-                        "candidates": [
-                            {
-                                "name": c.name,
-                                "rank": c.rank,
-                                "dept1": c.dept1,
-                                "dept2": c.dept2,
-                                "dept3": c.dept3,
-                                "tasks": c.tasks,
-                                "phone": c.phone,
-                                "score": c.final_score,
-                            }
-                            for c in ranked_candidates[:5]
-                        ],
-                        "reasoning": top_candidate.reasoning,
-                    }
-
-                    doc.recommendation_json = json.dumps(recommendation_dict, ensure_ascii=False)
-
-                    # 복수 배부 대상 저장 (신규)
-                    assigned_candidates_list = []
-                    for rc in ranked_candidates[:5]:  # 상위 5명까지
-                        assigned_candidates_list.append({
-                            "name": rc.name,
-                            "rank": rc.rank,
-                            "dept1": rc.dept1,
-                            "dept2": rc.dept2,
-                            "dept3": rc.dept3,
-                            "tasks": rc.tasks[:100],  # 간략히
-                            "phone": rc.phone,
-                            "final_score": rc.final_score,
-                            "rag_score": rc.rag_score,
-                            "llm_score": rc.llm_score
-                        })
-                    doc.assigned_candidates = json.dumps(assigned_candidates_list, ensure_ascii=False)
-
-                    # 대표 담당자는 1순위 (하위 호환)
-                    doc.assigned_to = top_candidate.name
+                # ==================== Phase 5: 결과 저장 ====================
+                if assigned_employee:
+                    doc.assigned_to = assigned_employee
                     doc.assigned_at = now_kst()
-                    doc.is_auto_assigned = True
+                    doc.is_auto_assigned = auto_assigned
                     doc.status = "배부 완료"
 
-                    logger.info(f"✅ 자동 배정 완료: {len(assigned_candidates_list)}명에게 배부")
+                    # 담당자 매칭 방식 기록
+                    assignment_method = "unknown"
+                    if llm_recommended_employee and assigned_employee == llm_recommended_employee:
+                        assignment_method = "llm_recommendation"
+                    elif auto_assigned:
+                        assignment_method = "auto_assigned_history"
+                    else:
+                        assignment_method = "vector_search"
 
-                    await db.commit()
+                    # 부서 정보 저장
+                    doc.filtered_departments = json.dumps({
+                        "pipeline_version": "v2",
+                        "recommended_dept": recommended_dept,
+                        "assigned_employee": assigned_employee,
+                        "employee_dept": employee_dept,
+                        "assignment_method": assignment_method,  # 추가
+                        "llm_recommended_employee": llm_recommended_employee,  # 추가
+                        "confidence": confidence,
+                        "auto_assigned": auto_assigned,
+                        "reasoning": reasoning,
+                        "evidence_counts": {
+                            "history": len(evidence.get('history_evidence', [])),
+                            "job": len(evidence.get('job_evidence', []))
+                        }
+                    }, ensure_ascii=False)
 
-                except Exception as e:
-                    doc.status = f"배정 실패: {str(e)[:50]}"
-                    await db.commit()
-            else:
-                doc.status = "담당자 없음"
+                    logger.info(f"✅ [PIPELINE_V2] 문서 처리 완료: {doc.id} -> {assigned_employee} ({recommended_dept})")
+                else:
+                    doc.status = "담당자 없음"
+                    doc.filtered_departments = json.dumps({
+                        "pipeline_version": "v2",
+                        "recommended_dept": recommended_dept,
+                        "confidence": confidence,
+                        "reasoning": reasoning,
+                        "error": "담당자를 찾을 수 없음"
+                    }, ensure_ascii=False)
+                    logger.warning(f"❌ [PIPELINE_V2] 담당자를 찾을 수 없음: {doc.id}")
+
                 await db.commit()
+
+            except Exception as e:
+                logger.error(f"[PIPELINE_V2] 처리 실패: {e}", exc_info=True)
+                doc.status = f"Pipeline V2 실패: {str(e)[:50]}"
+                await db.commit()
+                return
 
         except Exception as e:
             # 전체 오류 처리
@@ -841,22 +653,79 @@ async def get_document(
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
     
     content_preview = doc.content[:500] if doc.content else None
-    
+
     # recommendation_json은 별도로 조회 (컬럼이 있을 때만)
     recommendation = None
     has_recommendation_column = await has_recommendation_json_column(db)
-    
+
     if has_recommendation_column:
         try:
-            # recommendation_json 컬럼이 있는지 확인하기 위해 별도 쿼리
-            # SQLAlchemy의 text를 사용하여 안전하게 조회
+            # recommendation_json과 filtered_departments 컬럼 조회
             from sqlalchemy import text
             rec_result = await db.execute(
-                text("SELECT recommendation_json FROM documents WHERE id = :id"),
+                text("SELECT recommendation_json, filtered_departments FROM documents WHERE id = :id"),
                 {"id": document_id}
             )
-            rec_data = rec_result.scalar_one_or_none()
-            if rec_data and rec_data.strip():
+            row = rec_result.first()
+            rec_data = row[0] if row else None
+            filtered_dept_data = row[1] if row and len(row) > 1 else None
+
+            # Pipeline V2로 처리된 문서인지 확인 (filtered_departments 확인)
+            if filtered_dept_data and filtered_dept_data.strip():
+                try:
+                    filtered_dept = json.loads(filtered_dept_data)
+                    if filtered_dept.get("pipeline_version") == "v2" and filtered_dept.get("assigned_employee"):
+                        # Pipeline V2 문서: filtered_departments에서 담당자 정보 추출
+                        employee_name = filtered_dept["assigned_employee"]
+                        employee_dept = filtered_dept.get("employee_dept", "")
+                        reasoning = filtered_dept.get("reasoning", "")
+
+                        # 부서 정보 파싱 (예: "기획조정실 행정정보과 스마트행정팀")
+                        dept_parts = employee_dept.split() if employee_dept else []
+                        dept1 = dept_parts[0] if len(dept_parts) > 0 else ""
+                        dept2 = dept_parts[1] if len(dept_parts) > 1 else ""
+                        dept3 = dept_parts[2] if len(dept_parts) > 2 else ""
+
+                        # RAG에서 담당자 상세 정보 조회 시도
+                        try:
+                            employee_candidates = await rag_service.search_similar_employees(employee_name, top_k=1)
+                            if employee_candidates and employee_candidates[0].name == employee_name:
+                                primary_candidate = employee_candidates[0]
+                            else:
+                                # RAG 조회 실패 시 기본 정보로 생성
+                                primary_candidate = EmployeeCandidate(
+                                    name=employee_name,
+                                    rank="",
+                                    dept1=dept1,
+                                    dept2=dept2,
+                                    dept3=dept3,
+                                    tasks="",
+                                    phone="",
+                                    score=1.0
+                                )
+                        except Exception:
+                            # RAG 조회 실패 시 기본 정보로 생성
+                            primary_candidate = EmployeeCandidate(
+                                name=employee_name,
+                                rank="",
+                                dept1=dept1,
+                                dept2=dept2,
+                                dept3=dept3,
+                                tasks="",
+                                phone="",
+                                score=1.0
+                            )
+
+                        recommendation = AssignmentRecommendation(
+                            primary=primary_candidate,
+                            candidates=[],
+                            reasoning=reasoning
+                        )
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+
+            # Pipeline V2가 아닌 경우 기존 로직 사용
+            if not recommendation and rec_data and rec_data.strip():
                 try:
                     recommendation_data = json.loads(rec_data)
                     if recommendation_data and "primary" in recommendation_data:

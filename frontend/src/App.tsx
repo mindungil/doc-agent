@@ -2,6 +2,8 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import DocumentList from './pages/DocumentList'
 import DocumentDetail from './pages/DocumentDetail'
+import Statistics from './pages/Statistics'
+import DistributionSettings from './pages/DistributionSettings'
 import Login from './pages/Login'
 import ProtectedRoute from './components/ProtectedRoute'
 
@@ -31,6 +33,22 @@ function App() {
           element={
             <ProtectedRoute>
               <DocumentDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/statistics"
+          element={
+            <ProtectedRoute>
+              <Statistics />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <DistributionSettings />
             </ProtectedRoute>
           }
         />

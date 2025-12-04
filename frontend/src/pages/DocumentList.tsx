@@ -67,7 +67,14 @@ export default function DocumentList() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full divide-y divide-gray-200">
+              <table className="w-full divide-y divide-gray-200 table-fixed">
+                <colgroup>
+                  <col style={{width: '40%'}} />
+                  <col style={{width: '16%'}} />
+                  <col style={{width: '13%'}} />
+                  <col style={{width: '16%'}} />
+                  <col style={{width: '15%'}} />
+                </colgroup>
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
@@ -94,15 +101,19 @@ export default function DocumentList() {
                       return text.substring(0, maxLength) + '...'
                     }
                     const getStatusDisplay = (status: string) => {
-                      if (status === 'RAG 분석 중') return 'RAG 분석'
-                      if (status === 'LLM 분석 중') return 'LLM 분석'
-                      if (status === '담당자 추천 완료') return '추천 완료'
-                      if (status === '배부 완료') return '배부 완료'
-                      if (status.includes('파싱 중')) return '파싱 중'
-                      if (status.includes('파싱 실패')) return '파싱 실패'
-                      if (status.includes('자동 선별 실패')) return '선별 실패'
-                      if (status.includes('처리 오류')) return '처리 오류'
-                      return status
+                      // 콜론 앞부분만 추출 (실패 메시지 등에서 상세 내용 제거)
+                      const mainStatus = status.split(':')[0].trim()
+
+                      if (mainStatus === 'RAG 분석 중') return 'RAG 분석'
+                      if (mainStatus === 'LLM 분석 중') return 'LLM 분석'
+                      if (mainStatus === '담당자 추천 완료') return '추천 완료'
+                      if (mainStatus === '배부 완료') return '배부 완료'
+                      if (mainStatus.includes('파싱 중')) return '파싱 중'
+                      if (mainStatus.includes('파싱 실패')) return '파싱 실패'
+                      if (mainStatus.includes('자동 선별 실패')) return '선별 실패'
+                      if (mainStatus.includes('처리 오류')) return '처리 오류'
+                      if (mainStatus.includes('Pipeline V2 실패')) return 'Pipeline 실패'
+                      return mainStatus
                     }
                     return (
                       <tr key={doc.id} className="hover:bg-gray-50 transition-colors">

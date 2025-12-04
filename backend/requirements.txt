@@ -14,3 +14,11 @@ python-dotenv==1.0.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 
+# Pipeline V2 dependencies
+duckdb>=1.4.0
+pyarrow>=21.0.0
+pandas>=2.0.0
+bm25s>=0.2.0
+rapidfuzz>=3.0.0
+kiwipiepy>=0.17.0
+scipy>=1.13.0

@@ -30,10 +30,11 @@ services:
       - SESSION_SECRET_KEY=${SESSION_SECRET_KEY:-your-secret-key-change-in-production}
     volumes:
       - ./backend/uploads:/app/uploads
-      - ./backend/data:/app/data
+      - ./data:/app/data
       - ./.env:/app/.env:ro
       - ./backend/test_three_stage_pipeline.py:/app/test_three_stage_pipeline.py:ro
       - ./backend/app:/app/app
+      - ./csv:/app/csv:ro
     restart: unless-stopped
     networks:
       - app-network

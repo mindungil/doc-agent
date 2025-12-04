@@ -94,3 +94,8 @@ docker-volumes/
 *.temp
 *.bak
 *.backup
+
+*.pdf
+*.xlsx
+*.hwpx
+*.hwp

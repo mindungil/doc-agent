@@ -41,6 +41,21 @@ class DocumentModel(Base):
     filtering_processed_at = Column(DateTime, nullable=True)
 
 
+class FeedbackModel(Base):
+    """휴먼 피드백 모델"""
+    __tablename__ = "feedbacks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    keyword = Column(String, nullable=False, index=True)  # 문서 핵심 키워드
+    reporter = Column(String, nullable=True, index=True)  # 보고자
+    llm_predicted_dept = Column(String, nullable=False)  # LLM 예측 부서 (오답)
+    human_corrected_dept = Column(String, nullable=False)  # 담당자 수정 부서 (정답)
+    reason = Column(Text, nullable=True)  # 수정 사유
+    document_id = Column(Integer, nullable=True)  # 원본 문서 ID
+    document_title = Column(String, nullable=True)  # 원본 문서 제목
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 engine = create_async_engine(settings.database_url, echo=True)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
