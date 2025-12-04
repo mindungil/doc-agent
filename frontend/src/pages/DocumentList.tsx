@@ -8,44 +8,42 @@ export default function DocumentList() {
   const { data: documents, isLoading, refetch } = useQuery({
     queryKey: ['documents'],
     queryFn: documentApi.getDocuments,
+    refetchInterval: 3000, // 3초마다 자동 새로고침
   })
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-gray-50">
-      <header className="bg-white shadow-lg border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex justify-between items-center">
-            <div>
-              <Link to="/" className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 mb-3 text-sm font-medium hover:gap-3 transition-all">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-                대시보드로 돌아가기
-              </Link>
-              <h1 className="text-3xl font-bold text-gray-900">문서 등록</h1>
-            </div>
-          </div>
+      <header className="bg-white shadow-sm border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <Link to="/" className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 text-sm font-medium hover:gap-3 transition-all">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            대시보드로 돌아가기
+          </Link>
         </div>
       </header>
 
-      <main className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 max-w-7xl mx-auto">
-          <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-6 py-4 border-b border-gray-200">
-              <div className="flex items-center gap-2">
-                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+      <main className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* 문서 업로드 섹션 - 강조 */}
+          <div className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl shadow-2xl p-8 border-4 border-blue-400">
+            <div className="flex items-center gap-4 mb-6">
+              <div className="p-3 bg-white rounded-xl">
+                <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
-                <h2 className="text-xl font-bold text-gray-900">문서 업로드</h2>
+              </div>
+              <div>
+                <h2 className="text-3xl font-bold text-white">문서 업로드</h2>
+                <p className="text-blue-100 text-sm mt-1">새로운 문서를 등록하고 자동으로 담당자를 배정받으세요</p>
               </div>
             </div>
-            <div className="p-6">
-              <DocumentUpload onUploadSuccess={() => refetch()} />
-            </div>
+            <DocumentUpload onUploadSuccess={() => refetch()} />
           </div>
-        </div>
 
-        <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden max-w-7xl mx-auto">
+          {/* 업로드된 문서 목록 */}
+          <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-blue-50">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -176,6 +174,7 @@ export default function DocumentList() {
               </table>
             </div>
           )}
+          </div>
         </div>
       </main>
     </div>

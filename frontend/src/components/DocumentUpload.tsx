@@ -112,39 +112,42 @@ export default function DocumentUpload({ onUploadSuccess }: DocumentUploadProps)
   return (
     <div className="space-y-4">
       <div
-        className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${
+        className={`border-4 border-dashed rounded-2xl p-12 text-center transition-all ${
           isDragging
-            ? 'border-blue-500 bg-blue-50 scale-[1.02]'
-            : 'border-gray-300 bg-white hover:border-blue-400 hover:bg-gray-50'
+            ? 'border-white bg-blue-800 scale-[1.02]'
+            : 'border-blue-300 bg-white hover:border-white hover:bg-blue-800'
         } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        <div className="mb-4">
+        <div className="mb-6">
           <svg
-            className={`mx-auto h-16 w-16 ${isDragging ? 'text-blue-500' : 'text-gray-400'}`}
+            className={`mx-auto h-24 w-24 ${isDragging ? 'text-white' : 'text-blue-600'}`}
             stroke="currentColor"
             fill="none"
             viewBox="0 0 48 48"
           >
             <path
               d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
-              strokeWidth={2}
+              strokeWidth={2.5}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
           </svg>
         </div>
-        <p className="text-lg font-medium text-gray-700 mb-2">
-          {isDragging ? '여기에 파일을 놓으세요' : '파일을 드래그 앤 드롭하거나 클릭하여 선택하세요'}
+        <p className={`text-2xl font-bold mb-3 ${isDragging ? 'text-white' : 'text-gray-800'}`}>
+          {isDragging ? '여기에 파일을 놓으세요' : '파일을 드래그 앤 드롭'}
         </p>
-        <p className="text-sm text-gray-500 mb-4">
-          여러 파일을 동시에 선택할 수 있습니다 (PDF, DOCX, TXT)
+        <p className={`text-base mb-8 ${isDragging ? 'text-blue-100' : 'text-gray-600'}`}>
+          또는 아래 버튼을 클릭하여 파일을 선택하세요 (PDF, DOCX, TXT)
         </p>
         <label className="inline-block">
-          <span className="px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg cursor-pointer hover:from-blue-700 hover:to-blue-800 shadow-md hover:shadow-lg transition-all font-medium">
-            파일 선택
+          <span className="inline-flex items-center gap-3 px-12 py-6 bg-white text-blue-700 border-2 border-blue-300 rounded-2xl cursor-pointer hover:bg-blue-50 hover:border-blue-500 shadow-xl hover:shadow-2xl transition-all font-bold text-xl">
+            <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            파일 선택하기
           </span>
           <input
             type="file"

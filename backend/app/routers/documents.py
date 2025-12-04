@@ -247,19 +247,15 @@ async def process_document_async(document_id: int):
                         if reporter:
                             logger.info(f"[PIPELINE_V2] 과거 보고자 발견: {reporter}")
 
-                            # RAG에서 해당 보고자 정보 조회
-                            reporter_candidates = await rag_service.search_similar_employees(
-                                reporter,
-                                top_k=5
-                            )
+                            # RAG에서 이름으로 직접 검색 (메타데이터 검색)
+                            reporter_candidate = await rag_service.search_employee_by_name(reporter)
 
-                            # 이름이 정확히 일치하는 직원 찾기
-                            for candidate in reporter_candidates:
-                                if candidate.name == reporter:
-                                    assigned_employee = candidate.name
-                                    employee_dept = f"{candidate.dept1} {candidate.dept2} {candidate.dept3}".strip()
-                                    logger.info(f"[PIPELINE_V2] 과거 보고자 확인: {assigned_employee} ({employee_dept})")
-                                    break
+                            if reporter_candidate:
+                                assigned_employee = reporter_candidate.name
+                                employee_dept = f"{reporter_candidate.dept1} {reporter_candidate.dept2} {reporter_candidate.dept3}".strip()
+                                logger.info(f"✅ [PIPELINE_V2] 과거 보고자 메타데이터 검색 성공: {assigned_employee} ({employee_dept})")
+                            else:
+                                logger.warning(f"❌ [PIPELINE_V2] 과거 보고자 '{reporter}'를 Qdrant에서 찾을 수 없음")
 
                 # 3순위: 벡터 검색으로 부서 내 담당자 찾기
                 if not assigned_employee:
@@ -761,7 +757,9 @@ async def recommend_assignee(
     db: AsyncSession = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    """RAG + LLM을 통한 담당자 자동 추천"""
+    """Pipeline V2를 통한 담당자 자동 추천 (증거 수집 + RAG + LLM)"""
+    from app.services.pipeline_v2 import get_pipeline_v2
+
     # 필요한 컬럼만 선택
     result = await db.execute(
         select(
@@ -772,13 +770,13 @@ async def recommend_assignee(
         ).where(DocumentModel.id == document_id)
     )
     doc = result.first()
-    
+
     if not doc:
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
-    
+
     if not doc.content:
         raise HTTPException(status_code=400, detail="문서 내용이 없습니다.")
-    
+
     # 상태 업데이트 (raw SQL 사용)
     from sqlalchemy import text
     await db.execute(
@@ -786,36 +784,26 @@ async def recommend_assignee(
         {"status": "RAG 분석 중", "id": document_id}
     )
     await db.commit()
-    
+
     try:
-        document_text = f"{doc.title}\n\n{doc.content}"
-        candidates = await rag_service.search_similar_employees(document_text, top_k=10)
-        
-        if not candidates:
-            await db.execute(
-                text("UPDATE documents SET status = :status WHERE id = :id"),
-                {"status": "오류", "id": document_id}
-            )
-            await db.commit()
-            raise HTTPException(status_code=404, detail="유사한 직원을 찾을 수 없습니다.")
-        
-        await db.execute(
-            text("UPDATE documents SET status = :status WHERE id = :id"),
-            {"status": "LLM 분석 중", "id": document_id}
-        )
-        await db.commit()
-        
-        recommendation = await llm_service.recommend_assignee(
+        # Pipeline V2 사용
+        pipeline = get_pipeline_v2()
+
+        logger.info(f"Pipeline V2로 문서 {document_id} 담당자 추천 시작")
+
+        recommendation = await pipeline.recommend_assignee_with_pipeline(
             document_title=doc.title,
             document_content=doc.content,
-            candidates=candidates
+            db=db
         )
-        
+
+        logger.info(f"Pipeline V2 추천 완료: {recommendation.primary.name}")
+
         # 추천 결과를 JSON으로 저장 (컬럼이 없으면 추가)
         await ensure_recommendation_json_column(db)
         recommendation_json_str = None
         has_recommendation_column = await has_recommendation_json_column(db)
-        
+
         if has_recommendation_column:
             try:
                 recommendation_dict = {
@@ -845,15 +833,15 @@ async def recommend_assignee(
                     "reasoning": recommendation.reasoning,
                 }
                 recommendation_json_str = json.dumps(recommendation_dict, ensure_ascii=False)
-            except Exception:
-                pass
-        
+            except Exception as e:
+                logger.error(f"추천 결과 JSON 변환 실패: {e}")
+
         # 상태 및 recommendation_json 업데이트
         if has_recommendation_column and recommendation_json_str:
             await db.execute(
                 text("""
-                    UPDATE documents 
-                    SET status = :status, 
+                    UPDATE documents
+                    SET status = :status,
                         recommendation_json = :recommendation_json
                     WHERE id = :id
                 """),
@@ -869,24 +857,43 @@ async def recommend_assignee(
                 {"status": "담당자 추천 완료", "id": document_id}
             )
         await db.commit()
+
+        logger.info(f"문서 {document_id} 추천 결과 DB 저장 완료")
+
         return recommendation
-    
+
     except (QdrantConnectionError, VectorSearchError) as e:
-        doc.status = "오류"
+        logger.error(f"벡터 검색 실패: {e}")
+        await db.execute(
+            text("UPDATE documents SET status = :status WHERE id = :id"),
+            {"status": "오류", "id": document_id}
+        )
         await db.commit()
         raise HTTPException(status_code=503, detail=f"벡터 검색 실패: {str(e)}")
     except (LLMAPIError, LLMResponseParseError) as e:
-        doc.status = "오류"
+        logger.error(f"LLM 서비스 오류: {e}")
+        await db.execute(
+            text("UPDATE documents SET status = :status WHERE id = :id"),
+            {"status": "오류", "id": document_id}
+        )
         await db.commit()
         raise HTTPException(status_code=503, detail=f"LLM 서비스 오류: {str(e)}")
     except LLMServiceError as e:
-        doc.status = "오류"
+        logger.error(f"LLM 처리 실패: {e}")
+        await db.execute(
+            text("UPDATE documents SET status = :status WHERE id = :id"),
+            {"status": "오류", "id": document_id}
+        )
         await db.commit()
         raise HTTPException(status_code=500, detail=f"LLM 처리 실패: {str(e)}")
     except HTTPException:
         raise
     except Exception as e:
-        doc.status = "오류"
+        logger.error(f"추천 처리 중 예외 발생: {e}", exc_info=True)
+        await db.execute(
+            text("UPDATE documents SET status = :status WHERE id = :id"),
+            {"status": "오류", "id": document_id}
+        )
         await db.commit()
         raise HTTPException(status_code=500, detail=f"추천 처리 중 오류 발생: {str(e)}")
 

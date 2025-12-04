@@ -58,24 +58,109 @@ class RAGService:
         embedding = self.embedding_model.encode(query_text, normalize_embeddings=True)
         return embedding.tolist()
     
+    async def search_employee_by_name(
+        self,
+        employee_name: str
+    ) -> EmployeeCandidate:
+        """메타데이터로 담당자 이름 직접 검색
+
+        Args:
+            employee_name: 검색할 직원 이름
+
+        Returns:
+            EmployeeCandidate 또는 None
+        """
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+            # 이름으로 필터링
+            name_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="name",
+                        match=MatchValue(value=employee_name)
+                    )
+                ]
+            )
+
+            # Qdrant 스크롤 검색 (필터만 사용, 벡터 없음)
+            search_results = await asyncio.to_thread(
+                self.qdrant_client.scroll,
+                collection_name=self.collection_name,
+                scroll_filter=name_filter,
+                limit=1
+            )
+
+            # scroll 결과는 (points, next_page_offset) 튜플
+            points, _ = search_results
+
+            if points:
+                payload = points[0].payload
+                return EmployeeCandidate(
+                    name=payload.get("name", ""),
+                    rank=payload.get("rank", ""),
+                    dept1=payload.get("dept1", ""),
+                    dept2=payload.get("dept2", ""),
+                    dept3=payload.get("dept3", ""),
+                    tasks=payload.get("tasks", ""),
+                    phone=payload.get("phone", ""),
+                    score=None  # 메타데이터 검색이므로 점수 없음
+                )
+
+            return None
+
+        except Exception as e:
+            raise VectorSearchError(f"이름 검색 중 오류 발생: {str(e)}")
+
     async def search_similar_employees(
-        self, 
-        document_text: str, 
-        top_k: int = 10
+        self,
+        document_text: str,
+        top_k: int = 10,
+        dept_filter: str = None
     ) -> List[EmployeeCandidate]:
-        """문서 텍스트와 유사한 직원을 벡터 검색으로 찾기"""
+        """문서 텍스트와 유사한 직원을 벡터 검색으로 찾기
+
+        Args:
+            document_text: 검색할 문서 텍스트
+            top_k: 상위 K개 결과
+            dept_filter: 부서 필터 (dept1, dept2, dept3 중 하나라도 포함되면 매칭)
+        """
         try:
             # 임베딩 생성 (CPU 집약적 작업을 별도 스레드에서 실행)
             query_embedding = await asyncio.to_thread(
                 self.create_query_embedding, document_text
             )
-            
+
+            # Qdrant 필터 구성
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+            query_filter = None
+            if dept_filter:
+                # dept1, dept2, dept3 중 하나라도 dept_filter를 포함하면 매칭
+                query_filter = Filter(
+                    should=[
+                        FieldCondition(
+                            key="dept1",
+                            match=MatchValue(value=dept_filter)
+                        ),
+                        FieldCondition(
+                            key="dept2",
+                            match=MatchValue(value=dept_filter)
+                        ),
+                        FieldCondition(
+                            key="dept3",
+                            match=MatchValue(value=dept_filter)
+                        ),
+                    ]
+                )
+
             # Qdrant 검색 (동기 작업을 별도 스레드에서 실행)
             search_results = await asyncio.to_thread(
                 self.qdrant_client.search,
                 collection_name=self.collection_name,
                 query_vector=query_embedding,
                 limit=top_k,
+                query_filter=query_filter
             )
         except Exception as e:
             raise VectorSearchError(f"벡터 검색 중 오류 발생: {str(e)}")

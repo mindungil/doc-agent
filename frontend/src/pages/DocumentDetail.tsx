@@ -6,6 +6,8 @@ import EmployeeSearch from '../components/EmployeeSearch'
 import type { AssignmentRequest, EmployeeCandidate } from '../types'
 import { useState } from 'react'
 import { formatToKSTLocale } from '../utils/dateUtils'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 export default function DocumentDetail() {
   const { id } = useParams<{ id: string }>()
@@ -26,6 +28,10 @@ export default function DocumentDetail() {
       if (data?.status && (
         data.status === '업로드 완료' ||
         data.status === '파싱 중' ||
+        data.status === 'OCR 처리 중' ||
+        data.status === '텍스트 보정 중' ||
+        data.status === 'Pipeline V2 분석 중' ||
+        data.status === '담당자 검색 중' ||
         data.status === 'RAG 분석 중' ||
         data.status === 'LLM 분석 중'
       )) {
@@ -133,7 +139,9 @@ export default function DocumentDetail() {
                   <span className="text-gray-600 w-24">상태:</span>
                   <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                     document.status === '대기' || document.status === '업로드 완료' ? 'bg-gray-100 text-gray-800' :
-                    document.status === '파싱 중' || document.status === 'RAG 분석 중' || document.status === 'LLM 분석 중' ? 'bg-blue-100 text-blue-800' :
+                    document.status === '파싱 중' || document.status === 'OCR 처리 중' || document.status === '텍스트 보정 중' ||
+                    document.status === 'Pipeline V2 분석 중' || document.status === '담당자 검색 중' ||
+                    document.status === 'RAG 분석 중' || document.status === 'LLM 분석 중' ? 'bg-blue-100 text-blue-800' :
                     document.status === '담당자 추천 완료' ? 'bg-green-100 text-green-800' :
                     document.status === '배부 완료' ? 'bg-purple-100 text-purple-800' :
                     document.status.includes('오류') || document.status.includes('실패') ? 'bg-red-100 text-red-800' :
@@ -219,7 +227,9 @@ export default function DocumentDetail() {
               </div>
             )}
 
-            {(document.status === '업로드 완료' || document.status === '파싱 중' || document.status === 'RAG 분석 중' || document.status === 'LLM 분석 중') && (
+            {(document.status === '업로드 완료' || document.status === '파싱 중' || document.status === 'OCR 처리 중' ||
+              document.status === '텍스트 보정 중' || document.status === 'Pipeline V2 분석 중' || document.status === '담당자 검색 중' ||
+              document.status === 'RAG 분석 중' || document.status === 'LLM 분석 중') && (
               <div className="bg-white rounded-lg shadow-md p-6">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
@@ -260,9 +270,24 @@ export default function DocumentDetail() {
                   <div className="flex-1">
                     <h3 className="text-lg font-bold text-indigo-900 mb-3">🤖 LLM 의사결정 과정</h3>
                     <div className="bg-white rounded-lg p-4 border border-indigo-200 max-h-64 overflow-y-auto scrollbar-thin relative">
-                      <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap pb-2">
-                        {document.recommendation.reasoning}
-                      </p>
+                      <div className="text-sm text-gray-800 leading-relaxed pb-2 markdown-content">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({node, ...props}) => <p className="mb-3" {...props} />,
+                            strong: ({node, ...props}) => <strong className="font-bold text-gray-900" {...props} />,
+                            h1: ({node, ...props}) => <h1 className="text-xl font-bold mb-2 text-gray-900" {...props} />,
+                            h2: ({node, ...props}) => <h2 className="text-lg font-bold mb-2 text-gray-900" {...props} />,
+                            h3: ({node, ...props}) => <h3 className="text-base font-bold mb-2 text-gray-900" {...props} />,
+                            ul: ({node, ...props}) => <ul className="list-disc list-inside mb-3" {...props} />,
+                            ol: ({node, ...props}) => <ol className="list-decimal list-inside mb-3" {...props} />,
+                            li: ({node, ...props}) => <li className="mb-1" {...props} />,
+                            hr: ({node, ...props}) => <hr className="my-4 border-gray-300" {...props} />,
+                          }}
+                        >
+                          {document.recommendation.reasoning}
+                        </ReactMarkdown>
+                      </div>
                       {document.recommendation.reasoning.length > 200 && (
                         <div className="sticky bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-white via-white to-transparent pointer-events-none flex items-end justify-center pb-1">
                           <svg className="w-4 h-4 text-gray-400 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">

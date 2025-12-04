@@ -112,11 +112,13 @@ class EvidenceCollector:
             evidence = []
             for result in results:
                 payload = result.payload
+                # Qdrant는 영어 필드명 사용: name, dept1, dept2, dept3, rank, tasks
+                dept_full = f"{payload.get('dept1', '')} {payload.get('dept2', '')} {payload.get('dept3', '')}".strip()
                 evidence.append({
-                    'dept': payload.get('부서', ''),
-                    'job_description': payload.get('업무내용', ''),
-                    'rank': payload.get('직급', ''),
-                    'manager': payload.get('담당자', ''),
+                    'dept': dept_full or payload.get('display_dept', ''),
+                    'job_description': payload.get('tasks', ''),
+                    'rank': payload.get('rank', ''),
+                    'manager': payload.get('name', ''),
                     'score': result.score
                 })
 

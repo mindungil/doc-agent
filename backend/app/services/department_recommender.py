@@ -57,6 +57,7 @@ class DepartmentRecommender:
         if evidence['early_stopped']:
             return {
                 'recommended_dept': evidence['auto_assigned_dept'],
+                'recommended_employee': evidence.get('matched_document', {}).get('reporter'),
                 'confidence': 'high',
                 'reasoning': evidence['reason'],
                 'auto_assigned': True,
@@ -75,6 +76,7 @@ class DepartmentRecommender:
 
         return {
             'recommended_dept': llm_result['recommended_dept'],
+            'recommended_employee': llm_result.get('recommended_employee'),
             'confidence': llm_result['confidence'],
             'reasoning': llm_result['reasoning'],
             'auto_assigned': False,
