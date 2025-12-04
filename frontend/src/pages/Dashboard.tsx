@@ -5,6 +5,8 @@ import { useQuery } from '@tanstack/react-query'
 import { documentApi } from '../api/client'
 import DocumentCard from '../components/DocumentCard'
 import { useAuth } from '../contexts/AuthContext'
+import jbLogo from '../assets/jblogo.png'
+import jbLogo2 from '../assets/jblogo2.png'
 
 export default function Dashboard() {
   const { username, logout } = useAuth()
@@ -25,25 +27,13 @@ export default function Dashboard() {
       <header className="bg-white shadow-sm border-b-2 border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex justify-between items-center gap-6">
-            {/* 왼쪽: 시스템 제목 */}
+            {/* 왼쪽: 로고 */}
             <div className="flex-shrink-0">
-              <h1 className="text-2xl font-bold text-gray-900">
-                문서배부 자동화 시스템
-              </h1>
-              <p className="text-xs text-gray-500 mt-0.5">전북특별자치도</p>
-            </div>
-
-            {/* 중앙: 문서 등록 버튼 - 강조 */}
-            <div className="flex-1 flex justify-center">
-              <Link
-                to="/documents"
-                className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold text-base shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 ring-2 ring-blue-600 ring-offset-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                문서 등록
-              </Link>
+              <img
+                src={jbLogo2}
+                alt="전북특별자치도 문서배부 자동화 시스템"
+                className="h-12"
+              />
             </div>
 
             {/* 오른쪽: 기타 메뉴 */}
@@ -68,9 +58,11 @@ export default function Dashboard() {
                 설정
               </Link>
               <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200">
-                <div className="w-7 h-7 bg-gradient-to-br from-gray-400 to-gray-500 rounded-full flex items-center justify-center text-white text-xs font-semibold">
-                  {username?.charAt(0).toUpperCase()}
-                </div>
+                <img
+                  src={jbLogo}
+                  alt="전북특별자치도 로고"
+                  className="w-7 h-7 rounded-full object-contain"
+                />
                 <span className="text-sm font-medium text-gray-700">{username}</span>
               </div>
               <button
@@ -83,6 +75,29 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+
+      {/* 메인 기능 안내 섹션 */}
+      <div className="bg-blue-600 border-b-4 border-blue-700">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="flex items-center justify-between">
+            <div className="text-white">
+              <h2 className="text-2xl font-bold mb-1">문서 등록 및 자동 배부</h2>
+              <p className="text-blue-100">
+                새로운 문서를 등록하면 AI가 자동으로 적절한 부서에 배부합니다
+              </p>
+            </div>
+            <Link
+              to="/documents"
+              className="px-8 py-4 bg-white text-blue-600 rounded-lg hover:bg-blue-50 font-bold text-lg shadow-lg transition-all flex items-center gap-2"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+              </svg>
+              문서 등록하기
+            </Link>
+          </div>
+        </div>
+      </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <StatsBanner />

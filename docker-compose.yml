@@ -5,7 +5,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: doc-agent
+    container_name: doc-agent-backend
     ports:
       - "7001:7000"
     extra_hosts:
@@ -43,7 +43,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: document-distribution-frontend
+    container_name: doc-agent-frontend
     ports:
       - "0.0.0.0:7000:80"
     depends_on:

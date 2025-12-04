@@ -1,15 +1,18 @@
-# Pipeline V2 상세 문서
+# 전북특별자치도 문서배부 자동화 시스템 - 상세 문서
 
 ## 목차
 1. [개요](#개요)
-2. [아키텍처](#아키텍처)
-3. [주요 컴포넌트](#주요-컴포넌트)
-4. [처리 흐름](#처리-흐름)
-5. [증거 수집 메커니즘](#증거-수집-메커니즘)
-6. [조기 종료 (Early Stop)](#조기-종료-early-stop)
-7. [휴먼 피드백 시스템](#휴먼-피드백-시스템)
-8. [담당자 추천 로직](#담당자-추천-로직)
-9. [API 엔드포인트](#api-엔드포인트)
+2. [시스템 아키텍처](#시스템-아키텍처)
+3. [프로젝트 구조](#프로젝트-구조)
+4. [주요 컴포넌트](#주요-컴포넌트)
+5. [처리 흐름 (Pipeline V2)](#처리-흐름-pipeline-v2)
+6. [증거 수집 메커니즘](#증거-수집-메커니즘)
+7. [조기 종료 (Early Stop)](#조기-종료-early-stop)
+8. [휴먼 피드백 시스템](#휴먼-피드백-시스템)
+9. [담당자 추천 로직](#담당자-추천-로직)
+10. [API 엔드포인트](#api-엔드포인트)
+11. [Docker 배포](#docker-배포)
+12. [환경 설정](#환경-설정)
 
 ---
 
@@ -33,18 +36,61 @@ Pipeline V2는 전북특별자치도의 **문서 배부 자동화 시스템**의
 
 ---
 
-## 아키텍처
+## 시스템 아키텍처
+
+### 전체 시스템 구성
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        Frontend (React)                          │
+│                     포트: 7000 (Nginx)                           │
+│  - 문서 업로드 UI                                                │
+│  - 담당자 추천 결과 표시                                         │
+│  - 배정 이력 관리                                                │
+│  - 통계 대시보드                                                 │
+└────────────────────────┬─────────────────────────────────────────┘
+                         │ HTTP API
+                         ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      Backend (FastAPI)                           │
+│                      포트: 7001                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │              Pipeline V2 Processing Engine                 │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │ │
+│  │  │   OCR    │→│  텍스트   │→│   증거    │→│   LLM    │  │ │
+│  │  │  처리    │  │  정규화   │  │   수집    │  │  추론    │  │ │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  데이터베이스: SQLite (documents.db)                             │
+│  - documents 테이블 (문서 메타데이터, 추천 결과)                │
+│  - feedback 테이블 (휴먼 피드백)                                 │
+└────────────────────────┬─────────────────────────────────────────┘
+                         │
+              ┌──────────┼──────────┐
+              │          │          │
+              ▼          ▼          ▼
+    ┌───────────┐  ┌─────────┐  ┌──────────────┐
+    │  Qdrant   │  │  LLM    │  │ DeepSeek-OCR │
+    │ Vector DB │  │  API    │  │    서비스     │
+    └───────────┘  └─────────┘  └──────────────┘
+    사무분장 규정   MiniMax-M2   문서 텍스트 추출
+    직원 정보       추론 엔진
+```
+
+### Pipeline V2 처리 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         문서 업로드                              │
-│                     (PDF, DOCX, TXT)                            │
+│                  (PDF, DOCX, TXT, HWP)                          │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    1. OCR 처리 (Upstage)                        │
-│              - PDF → 텍스트 변환                                │
+│                1. OCR 처리 (DeepSeek-OCR)                       │
+│              - PDF/HWP → 텍스트 변환                            │
+│              - 이미지 문서 인식                                  │
 │              - 수신자 정보 추출 준비                            │
 └────────────────────────┬────────────────────────────────────────┘
                          │
@@ -133,6 +179,107 @@ Pipeline V2는 전북특별자치도의 **문서 배부 자동화 시스템**의
           │  - status 업데이트         │
           └────────────────────────────┘
 ```
+
+---
+
+## 프로젝트 구조
+
+### 디렉토리 구조
+
+```
+doc-agent/
+├── backend/                    # FastAPI 백엔드
+│   ├── app/
+│   │   ├── main.py            # FastAPI 애플리케이션 진입점
+│   │   ├── config.py          # 환경 설정
+│   │   ├── auth.py            # JWT 인증
+│   │   ├── database/
+│   │   │   └── db.py          # SQLAlchemy ORM
+│   │   ├── models/
+│   │   │   ├── schemas.py     # Pydantic 스키마
+│   │   │   └── ocr_schemas.py # OCR 스키마
+│   │   ├── routers/
+│   │   │   ├── documents.py   # 문서 API
+│   │   │   └── auth.py        # 인증 API
+│   │   └── services/          # 핵심 비즈니스 로직
+│   │       ├── pipeline_v2.py             # 전체 파이프라인 조율
+│   │       ├── evidence_collector.py      # 증거 수집
+│   │       ├── department_recommender.py  # 부서 추천
+│   │       ├── rag.py                     # Qdrant 벡터 검색
+│   │       ├── feedback_service.py        # 휴먼 피드백
+│   │       ├── bm25_index.py              # BM25 검색
+│   │       ├── ocr.py                     # OCR 처리
+│   │       ├── text_preprocessor.py       # 텍스트 전처리 (Kiwi)
+│   │       ├── text_correction.py         # LLM 텍스트 보정
+│   │       ├── recipient_filter.py        # 수신자 필터링
+│   │       └── llm.py                     # LLM 서비스
+│   ├── requirements.txt       # Python 의존성
+│   ├── Dockerfile
+│   ├── uploads/               # 업로드된 파일
+│   └── data/
+│       ├── documents.db       # SQLite 메인 DB
+│       └── history/           # 과거 문서 배부 이력 (Parquet)
+│
+├── frontend/                  # React 프론트엔드
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Dashboard.tsx         # 메인 대시보드
+│   │   │   ├── DocumentList.tsx      # 문서 목록
+│   │   │   ├── DocumentDetail.tsx    # 문서 상세
+│   │   │   ├── Statistics.tsx        # 통계
+│   │   │   ├── DistributionSettings.tsx  # 배부 설정
+│   │   │   └── Login.tsx             # 로그인
+│   │   ├── components/        # 재사용 컴포넌트
+│   │   │   ├── DocumentCard.tsx
+│   │   │   ├── DocumentUpload.tsx
+│   │   │   ├── AssigneeCard.tsx
+│   │   │   ├── EmployeeSearch.tsx
+│   │   │   ├── StatsBanner.tsx
+│   │   │   └── AssignmentHistoryTable.tsx
+│   │   ├── contexts/
+│   │   │   └── AuthContext.tsx       # 인증 상태 관리
+│   │   ├── api/
+│   │   │   └── client.ts             # API 클라이언트
+│   │   ├── assets/
+│   │   │   └── jblogo.png           # 전북도청 로고
+│   │   ├── App.tsx
+│   │   └── main.tsx
+│   ├── package.json
+│   ├── Dockerfile
+│   ├── nginx.conf             # Nginx 설정
+│   ├── vite.config.ts         # Vite 번들러
+│   └── tailwind.config.js     # Tailwind CSS
+│
+├── docker-compose.yml         # Docker Compose 설정
+├── .env                       # 환경 변수
+└── readme_pipeline_v2.md      # 본 문서
+```
+
+### 기술 스택
+
+#### 백엔드
+- **프레임워크**: FastAPI 0.104.1 + Uvicorn
+- **데이터베이스**: SQLite (SQLAlchemy 2.0 + aiosqlite)
+- **벡터 검색**: Qdrant 1.7.0
+- **검색 엔진**: BM25S 0.2.0 (문서 유사도)
+- **NLP**: Kiwipiepy 0.17.0 (형태소 분석), sentence-transformers
+- **LLM**: MiniMax-M2 (OpenAI API 호환)
+- **임베딩**: intfloat/multilingual-e5-large-instruct
+- **OCR**: DeepSeek-OCR 서비스
+- **인증**: python-jose (JWT), passlib (bcrypt)
+
+#### 프론트엔드
+- **프레임워크**: React 18.2 + TypeScript 5.3
+- **라우팅**: React Router 6.20
+- **상태 관리**: React Query 5.12 (데이터 페칭)
+- **스타일링**: Tailwind CSS 3.3
+- **HTTP 클라이언트**: Axios
+- **UI**: React Markdown (마크다운 렌더링)
+
+#### 인프라
+- **컨테이너**: Docker + Docker Compose
+- **웹 서버**: Nginx (프론트엔드 정적 파일 제공)
+- **포트**: Frontend (7000), Backend (7001)
 
 ---
 
@@ -632,7 +779,238 @@ CREATE TABLE feedback (
 
 ---
 
+## Docker 배포
+
+### 시스템 요구사항
+- Docker 20.10 이상
+- Docker Compose v2.0 이상
+- 최소 4GB RAM
+- 10GB 이상 디스크 공간
+
+### 설치 및 실행
+
+#### 1. 프로젝트 클론
+```bash
+git clone <repository-url>
+cd doc-agent
+```
+
+#### 2. 환경 변수 설정
+`.env` 파일을 프로젝트 루트에 생성하고 다음 내용을 설정합니다:
+
+```env
+# Qdrant 벡터 DB
+QDRANT_URL=http://host.docker.internal:6333
+QDRANT_COLLECTION=dept_knowledge
+QDRANT_API_KEY=
+
+# LLM 서비스
+LLM_API_URL=http://192.168.0.201:30010/v1/chat/completions
+LLM_MODEL=/mnt/ssd16tb/MiniMaxAI--MiniMax-M2
+LLM_API_KEY=
+
+# 임베딩 모델
+EMBEDDING_MODEL=intfloat/multilingual-e5-large-instruct
+
+# DeepSeek-OCR
+DEEPSEEK_OCR_URL=http://220.124.155.35:30100
+DEEPSEEK_OCR_API_KEY=
+DEEPSEEK_OCR_TIMEOUT=60
+
+# 데이터베이스
+DATABASE_URL=sqlite+aiosqlite:////app/data/documents.db
+
+# 파일 업로드
+UPLOAD_DIR=./uploads
+
+# 관리자 계정
+ADMIN_ID=admin
+ADMIN_PASSWORD=<your-secure-password>
+
+# 세션 보안
+SESSION_SECRET_KEY=<generate-random-key>
+```
+
+#### 3. Docker Compose로 빌드 및 실행
+```bash
+# 빌드 및 시작
+docker compose up --build -d
+
+# 로그 확인
+docker compose logs -f
+
+# 컨테이너 상태 확인
+docker compose ps
+```
+
+#### 4. 서비스 접속
+- **프론트엔드**: http://localhost:7000
+- **백엔드 API**: http://localhost:7001
+- **API 문서**: http://localhost:7001/docs
+
+#### 5. 컨테이너 관리
+```bash
+# 중지
+docker compose stop
+
+# 재시작
+docker compose restart
+
+# 삭제
+docker compose down
+
+# 볼륨까지 삭제
+docker compose down -v
+```
+
+### Docker Compose 구성
+
+```yaml
+services:
+  backend:
+    container_name: doc-agent-backend
+    ports:
+      - "7001:7000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - QDRANT_URL=${QDRANT_URL}
+      - LLM_API_URL=${LLM_API_URL}
+      # ... 기타 환경 변수
+
+  frontend:
+    container_name: doc-agent-frontend
+    ports:
+      - "7000:80"
+    depends_on:
+      - backend
+
+networks:
+  app-network:
+    driver: bridge
+```
+
+---
+
+## 환경 설정
+
+### 필수 외부 서비스
+
+#### 1. Qdrant Vector Database
+사무분장 규정과 직원 정보를 저장하는 벡터 데이터베이스입니다.
+
+**설치**:
+```bash
+docker run -p 6333:6333 qdrant/qdrant
+```
+
+**컬렉션 생성**:
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient(url="http://localhost:6333")
+client.create_collection(
+    collection_name="dept_knowledge",
+    vectors_config=VectorParams(size=1024, distance=Distance.COSINE)
+)
+```
+
+**데이터 구조**:
+- `name`: 직원 이름
+- `dept1/dept2/dept3`: 부서 계층 (실, 과, 팀)
+- `rank`: 직급
+- `tasks`: 업무 설명
+- `phone`: 연락처
+- `vector`: 업무 설명 임베딩 (1024차원)
+
+#### 2. LLM API (MiniMax-M2)
+OpenAI API 호환 형식의 LLM 서비스입니다.
+
+**요구사항**:
+- `/v1/chat/completions` 엔드포인트 지원
+- JSON 응답 형식
+- System/User 메시지 지원
+
+**대체 가능**: OpenAI GPT-4, Claude, Llama 등
+
+#### 3. DeepSeek-OCR
+문서 텍스트 추출 서비스입니다.
+
+**API 형식**:
+```bash
+POST /ocr
+Content-Type: multipart/form-data
+
+file: <binary>
+```
+
+**응답**:
+```json
+{
+  "text": "추출된 텍스트",
+  "confidence": 0.95
+}
+```
+
+### 데이터 준비
+
+#### 1. 과거 문서 배부 이력
+BM25 검색을 위한 과거 문서 데이터를 Parquet 형식으로 준비합니다.
+
+**위치**: `backend/data/history/history_*.parquet`
+
+**컬럼**:
+- `title`: 문서 제목
+- `cleaned_title`: 정규화된 제목
+- `dept`: 배부 부서
+- `reporter`: 보고자
+- `date`: 보고 일자
+- `doc_no`: 문서 번호
+
+#### 2. 사무분장 규정 데이터
+직원별 업무 정의를 CSV 형식으로 준비합니다.
+
+**형식**:
+```csv
+name,dept1,dept2,dept3,rank,tasks,phone
+홍길동,기획조정실,행정정보과,스마트행정팀,주무관,모바일앱 운영 및 관리,010-1234-5678
+```
+
+**Qdrant 업로드**:
+```python
+# scripts/upload_to_qdrant.py 실행
+python scripts/upload_to_qdrant.py --csv data/employees.csv
+```
+
+### 보안 설정
+
+#### 1. JWT 시크릿 키 생성
+```bash
+openssl rand -hex 32
+```
+
+생성된 키를 `.env` 파일의 `SESSION_SECRET_KEY`에 설정합니다.
+
+#### 2. 관리자 비밀번호
+`.env` 파일의 `ADMIN_PASSWORD`를 안전한 비밀번호로 변경합니다.
+
+#### 3. 방화벽 설정
+- 포트 7000 (프론트엔드): 외부 접근 허용
+- 포트 7001 (백엔드 API): 프론트엔드만 접근 (선택)
+- Qdrant 포트 6333: 내부 네트워크만 접근
+
+---
+
 ## 문의 및 기여
 
-프로젝트 관련 문의: 전북특별자치도 디지털혁신담당관실
+**프로젝트 관리**: 전북특별자치도 디지털혁신담당관실
+
+**기술 지원**:
+- 백엔드/AI: Pipeline V2 처리 엔진
+- 프론트엔드: React 기반 관리 UI
+- 인프라: Docker Compose 기반 배포
+
+**라이센스**: 전북특별자치도 내부 사용 전용
 
